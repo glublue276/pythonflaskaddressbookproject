@@ -182,6 +182,25 @@ def test_update_contact_ignores_blank_core_fields(monkeypatch):
     assert payload['phone_number'] == '415-555-0101'
 
 
+def test_update_contact_preserves_existing_fields_and_extra_fields(monkeypatch):
+    client, collection = make_client(monkeypatch)
+    contact = seed_contact(collection, extra_fields={'company': 'Northwind Labs', 'notes': 'VIP'})
+
+    response = client.patch(
+        f"/api/contacts/{contact['_id']}",
+        json={'address': '900 Mission Street'},
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload['first_name'] == 'Ava'
+    assert payload['last_name'] == 'Patel'
+    assert payload['address'] == '900 Mission Street'
+    assert payload['phone_number'] == '415-555-0101'
+    assert payload['extra_fields'] == {'company': 'Northwind Labs', 'notes': 'VIP'}
+    assert collection.documents[0]['searchable_text'].startswith('ava patel 900 mission street')
+
+
 def test_delete_contact(monkeypatch):
     client, collection = make_client(monkeypatch)
     contact = seed_contact(collection)
