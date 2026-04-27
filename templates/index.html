@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Address Book</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Python + MongoDB</p>
+          <h1>Address Book</h1>
+          <p class="subtitle">
+            Manage contacts, search them fast, and add custom fields whenever a
+            record needs more detail.
+          </p>
+        </div>
+      </section>
+
+      <section class="layout">
+        <div class="panel">
+          <h2>Add Record</h2>
+          <form id="contact-form" class="stack">
+            <input name="first_name" placeholder="First name" required />
+            <input name="last_name" placeholder="Last name" required />
+            <input name="address" placeholder="Address" required />
+            <input name="phone_number" placeholder="Phone number" required />
+
+            <div class="field-builder">
+              <input id="extra-field-name" placeholder="Custom field name" />
+              <input id="extra-field-value" placeholder="Custom field value" />
+              <button type="button" id="add-extra-field">Add field</button>
+            </div>
+
+            <div id="extra-fields-preview" class="tag-list"></div>
+
+            <button type="submit" class="primary">Save Contact</button>
+          </form>
+        </div>
+
+        <div class="panel">
+          <h2>Search</h2>
+          <form id="search-form" class="stack">
+            <input name="keyword" placeholder="Keyword search" />
+            <input name="first_name" placeholder="Search by first name" />
+            <input name="last_name" placeholder="Search by last name" />
+            <input name="address" placeholder="Search by address" />
+            <div class="actions">
+              <button type="submit" class="primary">Search</button>
+              <button type="button" id="reset-search">Reset</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="results-header">
+          <h2>Contacts</h2>
+          <button type="button" id="reload-contacts">Refresh</button>
+        </div>
+        <div id="contacts" class="contacts"></div>
+      </section>
+    </main>
+
+    <template id="contact-template">
+      <article class="contact-card">
+        <div class="contact-head">
+          <div>
+            <h3 class="contact-name"></h3>
+            <p class="contact-address"></p>
+            <p class="contact-phone"></p>
+          </div>
+          <button type="button" class="danger delete-contact">Delete</button>
+        </div>
+
+        <div class="extra-fields"></div>
+
+        <form class="inline-form update-contact-form">
+          <input name="first_name" placeholder="First name" />
+          <input name="last_name" placeholder="Last name" />
+          <input name="address" placeholder="Address" />
+          <input name="phone_number" placeholder="Phone number" />
+          <button type="submit">Update record</button>
+        </form>
+
+        <form class="inline-form field-form">
+          <input name="field_name" placeholder="Field name" required />
+          <input name="value" placeholder="Field value" required />
+          <button type="submit">Add or update field</button>
+        </form>
+      </article>
+    </template>
+
+    <script>
+      const apiBase = "/api/contacts";
+      const contactForm = document.getElementById("contact-form");
+      const searchForm = document.getElementById("search-form");
+      const contactsContainer = document.getElementById("contacts");
+      const contactTemplate = document.getElementById("contact-template");
+      const extraFieldsPreview = document.getElementById("extra-fields-preview");
+      const stagedExtraFields = {};
+
+      function renderStagedExtraFields() {
+        extraFieldsPreview.innerHTML = "";
+        Object.entries(stagedExtraFields).forEach(([key, value]) => {
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = key + ": " + value;
+          extraFieldsPreview.appendChild(tag);
+        });
+      }
+
+      async function request(url, options = {}) {
+        const response = await fetch(url, {
+          headers: { "Content-Type": "application/json" },
+          ...options,
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || "Request failed");
+        }
+        return response.json();
+      }
+
+      function contactMarkup(contact) {
+        const fragment = contactTemplate.content.cloneNode(true);
+        fragment.querySelector(".contact-name").textContent =
+          `${contact.first_name} ${contact.last_name}`.trim() || "Unnamed";
+        fragment.querySelector(".contact-address").textContent =
+          contact.address || "No address";
+        fragment.querySelector(".contact-phone").textContent =
+          contact.phone_number || "No phone number";
+
+        const card = fragment.querySelector(".contact-card");
+        const extraFields = fragment.querySelector(".extra-fields");
+
+        Object.entries(contact.extra_fields || {}).forEach(([key, value]) => {
+          const item = document.createElement("div");
+          item.className = "field-row";
+
+          const label = document.createElement("span");
+          label.textContent = `${key}: ${value}`;
+
+          const removeButton = document.createElement("button");
+          removeButton.type = "button";
+          removeButton.textContent = "Delete field";
+          removeButton.addEventListener("click", async () => {
+            await request(`${apiBase}/${contact.id}/fields/${encodeURIComponent(key)}`, {
+              method: "DELETE",
+            });
+            await loadContacts();
+          });
+
+          item.append(label, removeButton);
+          extraFields.appendChild(item);
+        });
+
+        fragment.querySelector(".delete-contact").addEventListener("click", async () => {
+          await request(`${apiBase}/${contact.id}`, { method: "DELETE" });
+          await loadContacts();
+        });
+
+        fragment
+          .querySelector(".update-contact-form")
+          .addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const formData = new FormData(event.currentTarget);
+            const payload = Object.fromEntries(formData.entries());
+            await request(`${apiBase}/${contact.id}`, {
+              method: "PATCH",
+              body: JSON.stringify(payload),
+            });
+            await loadContacts();
+          });
+
+        fragment.querySelector(".field-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const formData = new FormData(event.currentTarget);
+          const payload = Object.fromEntries(formData.entries());
+          await request(`${apiBase}/${contact.id}/fields`, {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+          });
+          event.currentTarget.reset();
+          await loadContacts();
+        });
+
+        return fragment;
+      }
+
+      async function loadContacts() {
+        const params = new URLSearchParams(new FormData(searchForm));
+        const contacts = await request(`${apiBase}?${params.toString()}`);
+        contactsContainer.innerHTML = "";
+
+        if (contacts.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "empty-state";
+          empty.textContent = "No contacts found.";
+          contactsContainer.appendChild(empty);
+          return;
+        }
+
+        contacts.forEach((contact) => {
+          contactsContainer.appendChild(contactMarkup(contact));
+        });
+      }
+
+      document.getElementById("add-extra-field").addEventListener("click", () => {
+        const key = document.getElementById("extra-field-name").value.trim();
+        const value = document.getElementById("extra-field-value").value.trim();
+        if (!key || !value) {
+          return;
+        }
+        stagedExtraFields[key] = value;
+        document.getElementById("extra-field-name").value = "";
+        document.getElementById("extra-field-value").value = "";
+        renderStagedExtraFields();
+      });
+
+      contactForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const formData = new FormData(contactForm);
+        const payload = Object.fromEntries(formData.entries());
+        payload.extra_fields = { ...stagedExtraFields };
+        await request(apiBase, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        Object.keys(stagedExtraFields).forEach((key) => delete stagedExtraFields[key]);
+        contactForm.reset();
+        renderStagedExtraFields();
+        await loadContacts();
+      });
+
+      searchForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await loadContacts();
+      });
+
+      document.getElementById("reset-search").addEventListener("click", async () => {
+        searchForm.reset();
+        await loadContacts();
+      });
+
+      document.getElementById("reload-contacts").addEventListener("click", loadContacts);
+
+      loadContacts();
+    </script>
+  </body>
+</html>
