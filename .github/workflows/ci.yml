@@ -3,11 +3,11 @@ name: CI
 on:
   pull_request:
     branches:
+      - feature/new-pull-request-setup
       - main
-      - master
   push:
     branches:
-      - master
+      - main
 
 jobs:
   lint:
