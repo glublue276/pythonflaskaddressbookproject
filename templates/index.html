@@ -138,6 +138,12 @@
 
         const card = fragment.querySelector(".contact-card");
         const extraFields = fragment.querySelector(".extra-fields");
+        const updateForm = fragment.querySelector(".update-contact-form");
+
+        updateForm.elements.first_name.value = contact.first_name || "";
+        updateForm.elements.last_name.value = contact.last_name || "";
+        updateForm.elements.address.value = contact.address || "";
+        updateForm.elements.phone_number.value = contact.phone_number || "";
 
         Object.entries(contact.extra_fields || {}).forEach(([key, value]) => {
           const item = document.createElement("div");
@@ -165,9 +171,7 @@
           await loadContacts();
         });
 
-        fragment
-          .querySelector(".update-contact-form")
-          .addEventListener("submit", async (event) => {
+        updateForm.addEventListener("submit", async (event) => {
             event.preventDefault();
             const formData = new FormData(event.currentTarget);
             const payload = Object.fromEntries(formData.entries());

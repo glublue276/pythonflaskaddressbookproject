@@ -174,7 +174,7 @@ def update_contact(contact_id: str):
     }
 
     for field in CORE_FIELDS:
-        if field in incoming:
+        if field in incoming and incoming[field] != "":
             merged[field] = incoming[field]
     if "extra_fields" in incoming:
         merged["extra_fields"].update(incoming["extra_fields"])

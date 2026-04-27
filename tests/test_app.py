@@ -160,6 +160,28 @@ def test_update_custom_field(monkeypatch):
     assert collection.documents[0]['extra_fields']['nickname'] == 'Ave'
 
 
+def test_update_contact_ignores_blank_core_fields(monkeypatch):
+    client, collection = make_client(monkeypatch)
+    contact = seed_contact(collection)
+
+    response = client.patch(
+        f"/api/contacts/{contact['_id']}",
+        json={
+            'first_name': '',
+            'last_name': '',
+            'address': '500 Updated Street',
+            'phone_number': '',
+        },
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload['first_name'] == 'Ava'
+    assert payload['last_name'] == 'Patel'
+    assert payload['address'] == '500 Updated Street'
+    assert payload['phone_number'] == '415-555-0101'
+
+
 def test_delete_contact(monkeypatch):
     client, collection = make_client(monkeypatch)
     contact = seed_contact(collection)

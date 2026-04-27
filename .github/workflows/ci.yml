@@ -1,9 +1,12 @@
 name: CI
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   pull_request:
     branches:
-      - feature/new-pull-request-setup
+      - feature/fix-update-record
       - main
   push:
     branches:
