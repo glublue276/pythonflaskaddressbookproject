@@ -22,7 +22,7 @@ indexes_ready = False
 
 CORE_FIELDS = ("first_name", "last_name", "address", "phone_number")
 
-
+#Adding comment to check git connection
 def ensure_indexes() -> None:
     contacts_collection.create_index("first_name")
     contacts_collection.create_index("last_name")
