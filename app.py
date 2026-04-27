@@ -7,7 +7,7 @@ from bson.errors import InvalidId
 from flask import Flask, jsonify, render_template, request
 from pymongo import MongoClient
 from pymongo.errors import ServerSelectionTimeoutError
-
+from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
 
@@ -22,7 +22,6 @@ indexes_ready = False
 
 CORE_FIELDS = ("first_name", "last_name", "address", "phone_number")
 
-#Adding comment to check git connection
 def ensure_indexes() -> None:
     contacts_collection.create_index("first_name")
     contacts_collection.create_index("last_name")
@@ -258,6 +257,8 @@ def delete_contact(contact_id: str):
 
 @app.errorhandler(Exception)
 def handle_exception(error: Exception):
+    if isinstance(error, HTTPException):
+        return error
     if isinstance(error, ValueError):
         return jsonify({"error": str(error)}), 400
     if isinstance(error, TypeError):
