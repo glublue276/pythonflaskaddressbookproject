@@ -2,13 +2,16 @@ name: CI
 
 on:
   pull_request:
+    branches:
+      - feature/new-pull-request-setup
+      - main
   push:
     branches:
       - main
-      - master
 
 jobs:
-  checks:
+  lint:
+    name: lint
     runs-on: ubuntu-latest
 
     steps:
@@ -19,6 +22,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |
@@ -27,6 +32,26 @@ jobs:
 
       - name: Run linter
         run: ruff check .
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run unit tests
         env:
