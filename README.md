@@ -91,7 +91,15 @@ dynamic extra fields.
 ```text
 .
 |-- app.py
+|-- package.json
+|-- playwright.config.js
 |-- requirements.txt
+|-- tests/
+|   `-- e2e/
+|       |-- ui-tests/
+|       |   `-- address-book.spec.js
+|       `-- unit-tests/
+|           `-- test_app.py
 |-- templates/
 |   `-- index.html
 `-- static/
@@ -185,6 +193,64 @@ Then open:
 
 ```text
 http://127.0.0.1:5000
+```
+
+## Playwright smoke tests
+
+Install the JavaScript test dependency:
+
+```bash
+npm install
+```
+
+Install the Playwright browser:
+
+```bash
+npx playwright install chromium
+```
+
+Run the smoke suite:
+
+```bash
+npm run test:e2e
+```
+
+Run the smoke suite with verbose Playwright API logs:
+
+```bash
+npm run test:e2e:debug
+```
+
+Playwright now targets your already-running local app on port `5000`, so start
+the Flask app before you execute the tests.
+
+## Consistent local test workflow
+
+You can also use the included `Makefile`:
+
+```bash
+make test-unit
+make test-ui
+make test-ui-debug
+make test
+```
+
+If a Playwright run gets stuck or leaves a stale process behind:
+
+```bash
+make clean-ui
+```
+
+If pytest cache permissions ever get weird again:
+
+```bash
+make reset-pytest-cache
+```
+
+Run the Python unit tests:
+
+```bash
+pytest tests/e2e/unit-tests/test_app.py
 ```
 
 ### AWS App Runner deployment
