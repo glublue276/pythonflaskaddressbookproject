@@ -6,11 +6,11 @@ env:
 on:
   pull_request:
     branches:
-      - feature/fix-update-record
       - main
   push:
     branches:
       - main
+      - feature/**
 
 jobs:
   lint:
