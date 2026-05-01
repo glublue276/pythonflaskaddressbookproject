@@ -1,0 +1,204 @@
+name: Deploy to Amazon ECS Express Mode
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Optional image tag override. Defaults to the current commit SHA.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-app-runner-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ECS_EXPRESS_SERVICE_ARN: ${{ vars.ECS_EXPRESS_SERVICE_ARN }}
+  ECS_EXPRESS_SERVICE_NAME: ${{ vars.ECS_EXPRESS_SERVICE_NAME }}
+  ECS_EXPRESS_EXECUTION_ROLE_ARN: ${{ vars.ECS_EXPRESS_EXECUTION_ROLE_ARN }}
+  ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN: ${{ vars.ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN }}
+  MONGO_URI_SECRET_ARN: ${{ vars.MONGO_URI_SECRET_ARN }}
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.build-image.outputs.image_uri }}
+      image_tag: ${{ steps.build-image.outputs.image_tag }}
+      service_arn: ${{ steps.deploy-service.outputs.service_arn }}
+      service_url: ${{ steps.describe-service.outputs.service_url }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate deployment configuration
+        run: |
+          test -n "${AWS_REGION}" || (echo "Missing repo variable AWS_REGION" && exit 1)
+          test -n "${ECR_REPOSITORY}" || (echo "Missing repo variable ECR_REPOSITORY" && exit 1)
+          test -n "${ECS_EXPRESS_SERVICE_NAME}" || (echo "Missing repo variable ECS_EXPRESS_SERVICE_NAME" && exit 1)
+          test -n "${ECS_EXPRESS_EXECUTION_ROLE_ARN}" || (echo "Missing repo variable ECS_EXPRESS_EXECUTION_ROLE_ARN" && exit 1)
+          test -n "${ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN}" || (echo "Missing repo variable ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN" && exit 1)
+          test -n "${MONGO_URI_SECRET_ARN}" || (echo "Missing repo variable MONGO_URI_SECRET_ARN" && exit 1)
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 || \
+          aws ecr create-repository \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-scanning-configuration scanOnPush=true
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "registry=${REGISTRY}" >> "$GITHUB_OUTPUT"
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REGISTRY}"
+
+      - name: Build and push image
+        id: build-image
+        run: |
+          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          if [ -z "${IMAGE_TAG}" ]; then
+            IMAGE_TAG="${GITHUB_SHA::7}"
+          fi
+
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          LATEST_IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:latest"
+
+          docker build -t "${IMAGE_URI}" -t "${LATEST_IMAGE_URI}" .
+          docker push "${IMAGE_URI}"
+          docker push "${LATEST_IMAGE_URI}"
+
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update ECS Express service
+        id: deploy-service
+        run: |
+          PRIMARY_CONTAINER="$(cat <<EOF
+          {
+            "image": "${{ steps.build-image.outputs.image_uri }}",
+            "containerPort": 5000,
+            "environment": [
+              {"name": "MONGO_DB_NAME", "value": "address_book"},
+              {"name": "MONGO_COLLECTION", "value": "contacts"},
+              {"name": "PORT", "value": "5000"}
+            ],
+            "secrets": [
+              {"name": "MONGO_URI", "valueFrom": "${MONGO_URI_SECRET_ARN}"}
+            ],
+            "awsLogsConfiguration": {
+              "logGroup": "/ecs/express/${ECS_EXPRESS_SERVICE_NAME}",
+              "logStreamPrefix": "ecs"
+            }
+          }
+          EOF
+          )"
+
+          SERVICE_ARN="${ECS_EXPRESS_SERVICE_ARN}"
+          if [ -n "${SERVICE_ARN}" ]; then
+            aws ecs update-express-gateway-service \
+              --service-arn "${SERVICE_ARN}" \
+              --health-check-path "/health" \
+              --primary-container "${PRIMARY_CONTAINER}" > deploy-response.json
+          else
+            aws ecs create-express-gateway-service \
+              --service-name "${ECS_EXPRESS_SERVICE_NAME}" \
+              --execution-role-arn "${ECS_EXPRESS_EXECUTION_ROLE_ARN}" \
+              --infrastructure-role-arn "${ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN}" \
+              --health-check-path "/health" \
+              --primary-container "${PRIMARY_CONTAINER}" > deploy-response.json
+          fi
+
+          SERVICE_ARN="$(python3 -c 'import json; import sys; data=json.load(open("deploy-response.json")); print(data["service"]["serviceArn"])')"
+          echo "service_arn=${SERVICE_ARN}" >> "$GITHUB_OUTPUT"
+
+      - name: Monitor ECS Express deployment
+        run: |
+          aws ecs monitor-express-gateway-service \
+            --service-arn "${{ steps.deploy-service.outputs.service_arn }}" \
+            --monitor-resources DEPLOYMENT \
+            --monitor-mode TEXT-ONLY
+
+      - name: Describe ECS Express service
+        id: describe-service
+        run: |
+          aws ecs describe-express-gateway-service \
+            --service-arn "${{ steps.deploy-service.outputs.service_arn }}" > service-description.json
+
+          SERVICE_URL="$(python3 - <<'PY'
+          import json
+          data = json.load(open("service-description.json"))
+          configurations = data["service"].get("activeConfigurations", [])
+          endpoint = ""
+          for config in configurations:
+            for ingress in config.get("ingressPaths", []):
+              if ingress.get("accessType") == "PUBLIC":
+                endpoint = ingress.get("endpoint", "")
+                break
+            if endpoint:
+              break
+          if not endpoint:
+            raise SystemExit("No public endpoint found in ECS Express service description")
+          if not endpoint.startswith("http"):
+            endpoint = f"https://{endpoint}"
+          print(endpoint)
+          PY
+          )"
+
+          echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    needs: deploy
+
+    steps:
+      - name: Wait for health endpoint
+        run: |
+          HEALTH_URL="${{ needs.deploy.outputs.service_url }}/health"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error "${HEALTH_URL}"; then
+              echo
+              echo "Health check passed for ${HEALTH_URL}"
+              exit 0
+            fi
+            echo "Attempt ${attempt}/30 failed. Waiting for deployment to become healthy..."
+            sleep 20
+          done
+          echo "Deployment health check failed for ${HEALTH_URL}"
+          exit 1
+
+      - name: Write deployment metadata
+        if: always()
+        run: |
+          cat <<EOF > deployment-summary.txt
+          image_uri=${{ needs.deploy.outputs.image_uri }}
+          image_tag=${{ needs.deploy.outputs.image_tag }}
+          ecs_express_service_arn=${{ needs.deploy.outputs.service_arn }}
+          ecs_express_service_url=${{ needs.deploy.outputs.service_url }}
+          workflow_run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+
+      - name: Upload deployment metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-ecs-express-deploy-metadata
+          path: deployment-summary.txt
+          if-no-files-found: warn
