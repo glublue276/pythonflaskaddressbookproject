@@ -105,17 +105,23 @@ jobs:
 
       - name: Seed MongoDB for UI tests
         run: |
-          mongosh "mongodb://127.0.0.1:27017/address_book" --quiet --eval '
-            db.contacts.deleteMany({});
-            db.contacts.insertOne({
-              first_name: "CI",
-              last_name: "Seed",
-              address: "123 Workflow Lane",
-              phone_number: "555-0000",
-              extra_fields: { source: "github-actions" },
-              searchable_text: "ci seed 123 workflow lane 555-0000 github-actions"
-            });
-          '
+          python - <<'PY'
+          from pymongo import MongoClient
+
+          client = MongoClient("mongodb://127.0.0.1:27017/")
+          collection = client["address_book"]["contacts"]
+          collection.delete_many({})
+          collection.insert_one(
+              {
+                  "first_name": "CI",
+                  "last_name": "Seed",
+                  "address": "123 Workflow Lane",
+                  "phone_number": "555-0000",
+                  "extra_fields": {"source": "github-actions"},
+                  "searchable_text": "ci seed 123 workflow lane 555-0000 github-actions",
+              }
+          )
+          PY
 
       - name: Run UI tests
         env:
