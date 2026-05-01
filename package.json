@@ -1,0 +1,12 @@
+{
+  "name": "python-address-book-project",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:debug": "DEBUG=pw:api playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.54.2"
+  }
+}

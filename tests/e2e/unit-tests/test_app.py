@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 from bson import ObjectId
@@ -145,6 +146,26 @@ def test_keyword_search_returns_matching_contact(monkeypatch):
     assert payload[0]['first_name'] == 'Noah'
 
 
+def test_list_contacts_logs_request_details(monkeypatch, caplog):
+    client, collection = make_client(monkeypatch)
+    seed_contact(collection)
+
+    with caplog.at_level(logging.INFO, logger=address_book_app.app.logger.name):
+        response = client.get('/api/contacts?keyword=ava')
+
+    assert response.status_code == 200
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        'Request started: method=GET path=/api/contacts query=keyword=ava' in message
+        for message in messages
+    )
+    assert any("Listed contacts: count=1 keyword='ava'" in message for message in messages)
+    assert any(
+        'Request finished: method=GET path=/api/contacts status=200' in message
+        for message in messages
+    )
+
+
 def test_update_custom_field(monkeypatch):
     client, collection = make_client(monkeypatch)
     contact = seed_contact(collection)
@@ -199,6 +220,28 @@ def test_update_contact_preserves_existing_fields_and_extra_fields(monkeypatch):
     assert payload['phone_number'] == '415-555-0101'
     assert payload['extra_fields'] == {'company': 'Northwind Labs', 'notes': 'VIP'}
     assert collection.documents[0]['searchable_text'].startswith('ava patel 900 mission street')
+
+
+def test_create_contact_logs_created_name(monkeypatch, caplog):
+    client, collection = make_client(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger=address_book_app.app.logger.name):
+        response = client.post(
+            '/api/contacts',
+            json={
+                'first_name': 'Elena',
+                'last_name': 'Garcia',
+                'address': '501 Lake Shore Drive',
+                'phone_number': '312-555-0199',
+            },
+        )
+
+    assert response.status_code == 201
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        'Created contact:' in message and 'name=Elena Garcia' in message
+        for message in messages
+    )
 
 
 def test_delete_contact(monkeypatch):

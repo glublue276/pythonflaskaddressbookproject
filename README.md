@@ -91,7 +91,15 @@ dynamic extra fields.
 ```text
 .
 |-- app.py
+|-- package.json
+|-- playwright.config.js
 |-- requirements.txt
+|-- tests/
+|   `-- e2e/
+|       |-- ui-tests/
+|       |   `-- address-book.spec.js
+|       `-- unit-tests/
+|           `-- test_app.py
 |-- templates/
 |   `-- index.html
 `-- static/
@@ -147,3 +155,142 @@ http://127.0.0.1:5000
 - This is a basic starter app; for production you would typically add input
   validation, pagination, authentication, structured logging, and better search
   indexing.
+
+## Production and AWS deployment
+
+### Production runtime
+
+Use `gunicorn` instead of Flask's development server:
+
+```bash
+gunicorn --bind 0.0.0.0:5000 app:app
+```
+
+The app also exposes a health endpoint:
+
+```text
+/health
+```
+
+### Sandbox-style container test
+
+Build the container locally:
+
+```bash
+docker build -t python-address-book .
+```
+
+Run it against a reachable MongoDB instance:
+
+```bash
+docker run --rm -p 5000:5000 \
+  -e MONGO_URI="mongodb://host.docker.internal:27017/" \
+  -e MONGO_DB_NAME="address_book" \
+  python-address-book
+```
+
+Then open:
+
+```text
+http://127.0.0.1:5000
+```
+
+## Playwright smoke tests
+
+Install the JavaScript test dependency:
+
+```bash
+npm install
+```
+
+Install the Playwright browser:
+
+```bash
+npx playwright install chromium
+```
+
+Run the smoke suite:
+
+```bash
+npm run test:e2e
+```
+
+Run the smoke suite with verbose Playwright API logs:
+
+```bash
+npm run test:e2e:debug
+```
+
+Playwright now targets your already-running local app on port `5000`, so start
+the Flask app before you execute the tests.
+
+## Consistent local test workflow
+
+You can also use the included `Makefile`:
+
+```bash
+make test-unit
+make test-ui
+make test-ui-debug
+make test
+```
+
+If a Playwright run gets stuck or leaves a stale process behind:
+
+```bash
+make clean-ui
+```
+
+If pytest cache permissions ever get weird again:
+
+```bash
+make reset-pytest-cache
+```
+
+Run the Python unit tests:
+
+```bash
+pytest tests/e2e/unit-tests/test_app.py
+```
+
+### AWS App Runner deployment
+
+This repository is ready to deploy as a containerized service to AWS App
+Runner.
+
+1. Create a MongoDB Atlas cluster or another reachable MongoDB deployment.
+2. Build and push the Docker image to Amazon ECR.
+3. Create an App Runner service from that ECR image.
+4. Set runtime environment variables:
+
+```text
+MONGO_URI=mongodb+srv://...
+MONGO_DB_NAME=address_book
+MONGO_COLLECTION=contacts
+PORT=5000
+```
+
+5. Set the health check path in App Runner to:
+
+```text
+/health
+```
+
+### Example ECR flow
+
+```bash
+aws ecr create-repository --repository-name python-address-book
+```
+
+```bash
+aws ecr get-login-password --region <aws-region> | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<aws-region>.amazonaws.com
+```
+
+```bash
+docker build -t python-address-book .
+docker tag python-address-book:latest <account-id>.dkr.ecr.<aws-region>.amazonaws.com/python-address-book:latest
+docker push <account-id>.dkr.ecr.<aws-region>.amazonaws.com/python-address-book:latest
+```
+
+From there, point App Runner at the ECR image and configure the environment
+variables above.
