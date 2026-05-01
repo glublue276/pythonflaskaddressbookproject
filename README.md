@@ -258,10 +258,54 @@ pytest tests/e2e/unit-tests/test_app.py
 This repository is ready to deploy as a containerized service to AWS App
 Runner.
 
-1. Create a MongoDB Atlas cluster or another reachable MongoDB deployment.
-2. Build and push the Docker image to Amazon ECR.
-3. Create an App Runner service from that ECR image.
-4. Set runtime environment variables:
+#### Required AWS setup
+
+Before you run the deployment workflow, set up:
+
+1. An AWS App Runner service that is configured to deploy from an Amazon ECR
+   image repository.
+2. A GitHub OIDC IAM role that GitHub Actions can assume.
+3. Repository variables in GitHub:
+   - `AWS_REGION`
+   - `ECR_REPOSITORY`
+   - `APP_RUNNER_SERVICE_ARN`
+   - `APP_RUNNER_BASE_URL`
+4. Repository secret in GitHub:
+   - `AWS_ROLE_TO_ASSUME`
+
+The App Runner service should point at the same ECR repository that the
+workflow pushes to. This workflow publishes both a commit-based image tag and a
+`latest` tag, then calls `start-deployment` on the existing App Runner
+service.
+
+#### Deployment workflow
+
+The repository includes a manual GitHub Actions workflow:
+
+```text
+.github/workflows/deploy-apprunner.yml
+```
+
+Run it from the GitHub Actions tab with `workflow_dispatch`.
+
+What it does:
+
+1. Assumes your AWS role through GitHub OIDC.
+2. Ensures the target ECR repository exists.
+3. Builds and pushes the Docker image to ECR.
+4. Triggers a fresh AWS App Runner deployment.
+5. Polls the deployed `/health` endpoint until the app is healthy.
+6. Uploads a small deployment summary artifact to the workflow run.
+
+You can optionally provide an `image_tag` input when you manually launch the
+workflow. If you leave it blank, the workflow uses the current commit SHA.
+
+#### App Runner runtime settings
+
+The deployed App Runner service should also include:
+
+1. A MongoDB Atlas cluster or another reachable MongoDB deployment.
+2. Runtime environment variables:
 
 ```text
 MONGO_URI=mongodb+srv://...
@@ -270,7 +314,7 @@ MONGO_COLLECTION=contacts
 PORT=5000
 ```
 
-5. Set the health check path in App Runner to:
+3. A health check path in App Runner of:
 
 ```text
 /health
