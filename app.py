@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from typing import Any, Dict
@@ -10,10 +11,14 @@ from pymongo.errors import ServerSelectionTimeoutError
 from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+app.logger.setLevel(logging.INFO)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "address_book")
 MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "contacts")
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", "5000"))
 
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
 db = client[MONGO_DB_NAME]
@@ -103,9 +108,47 @@ def parse_object_id(contact_id: str) -> ObjectId:
         raise ValueError("Invalid contact id") from error
 
 
+def summarize_contact(document: Dict[str, Any]) -> str:
+    return " ".join(
+        part
+        for part in (
+            normalize_text(document.get("first_name")),
+            normalize_text(document.get("last_name")),
+        )
+        if part
+    ) or "<unnamed>"
+
+
+@app.before_request
+def log_request_started() -> None:
+    app.logger.info(
+        "Request started: method=%s path=%s query=%s",
+        request.method,
+        request.path,
+        request.query_string.decode("utf-8"),
+    )
+
+
+@app.after_request
+def log_request_finished(response):
+    app.logger.info(
+        "Request finished: method=%s path=%s status=%s",
+        request.method,
+        request.path,
+        response.status_code,
+    )
+    return response
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.get("/health")
+def health_check():
+    client.admin.command("ping")
+    return jsonify({"status": "ok"})
 
 
 @app.get("/api/contacts")
@@ -127,7 +170,16 @@ def list_contacts():
         query["address"] = regex_clause(address)
 
     contacts = collection.find(query).sort("first_name", 1)
-    return jsonify([serialize_contact(contact) for contact in contacts])
+    serialized_contacts = [serialize_contact(contact) for contact in contacts]
+    app.logger.info(
+        "Listed contacts: count=%s keyword=%r first_name=%r last_name=%r address=%r",
+        len(serialized_contacts),
+        keyword,
+        first_name,
+        last_name,
+        address,
+    )
+    return jsonify(serialized_contacts)
 
 
 @app.post("/api/contacts")
@@ -138,6 +190,11 @@ def create_contact():
     document["searchable_text"] = build_searchable_text(document)
     result = collection.insert_one(document)
     created = collection.find_one({"_id": result.inserted_id})
+    app.logger.info(
+        "Created contact: id=%s name=%s",
+        result.inserted_id,
+        summarize_contact(created),
+    )
     return jsonify(serialize_contact(created)), 201
 
 
@@ -152,6 +209,7 @@ def replace_contact(contact_id: str):
     if result.matched_count == 0:
         return jsonify({"error": "Contact not found"}), 404
     updated = collection.find_one({"_id": object_id})
+    app.logger.info("Replaced contact: id=%s name=%s", contact_id, summarize_contact(updated))
     return jsonify(serialize_contact(updated))
 
 
@@ -182,6 +240,7 @@ def update_contact(contact_id: str):
     merged["searchable_text"] = build_searchable_text(merged)
     collection.update_one({"_id": object_id}, {"$set": merged})
     updated = collection.find_one({"_id": object_id})
+    app.logger.info("Updated contact: id=%s name=%s", contact_id, summarize_contact(updated))
     return jsonify(serialize_contact(updated))
 
 
@@ -215,6 +274,12 @@ def update_contact_fields(contact_id: str):
     updated["searchable_text"] = build_searchable_text(updated)
     collection.update_one({"_id": object_id}, {"$set": updated})
     contact = collection.find_one({"_id": object_id})
+    app.logger.info(
+        "Updated field: id=%s field=%s core_field=%s",
+        contact_id,
+        field_name,
+        field_name in CORE_FIELDS,
+    )
     return jsonify(serialize_contact(contact))
 
 
@@ -242,6 +307,12 @@ def delete_contact_field(contact_id: str, field_name: str):
     updated["searchable_text"] = build_searchable_text(updated)
     collection.update_one({"_id": object_id}, {"$set": updated})
     contact = collection.find_one({"_id": object_id})
+    app.logger.info(
+        "Deleted field: id=%s field=%s core_field=%s",
+        contact_id,
+        field_name,
+        field_name in CORE_FIELDS,
+    )
     return jsonify(serialize_contact(contact))
 
 
@@ -252,6 +323,7 @@ def delete_contact(contact_id: str):
     result = collection.delete_one({"_id": object_id})
     if result.deleted_count == 0:
         return jsonify({"error": "Contact not found"}), 404
+    app.logger.info("Deleted contact: id=%s", contact_id)
     return jsonify({"message": "Contact deleted"})
 
 
@@ -264,9 +336,11 @@ def handle_exception(error: Exception):
     if isinstance(error, TypeError):
         return jsonify({"error": str(error)}), 400
     if isinstance(error, ServerSelectionTimeoutError):
+        app.logger.exception("MongoDB is not reachable")
         return jsonify({"error": "MongoDB is not reachable. Start MongoDB and try again."}), 503
+    app.logger.exception("Unhandled application error")
     return jsonify({"error": str(error)}), 500
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host=HOST, port=PORT, debug=False)
