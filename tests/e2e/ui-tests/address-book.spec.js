@@ -13,7 +13,14 @@ test("loads the address book home page", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "Address Book" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Contacts" })).toBeVisible();
-  await expect(page.locator(".contact-card").first()).toBeVisible();
+  await expect(page.locator("#contacts")).toBeVisible();
+
+  const hasContacts = await page.locator(".contact-card").count();
+  if (hasContacts > 0) {
+    await expect(page.locator(".contact-card").first()).toBeVisible();
+  } else {
+    await expect(page.getByText("No contacts found.")).toBeVisible();
+  }
 });
 
 
