@@ -13,7 +13,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: aws-app-runner-deploy
+  group: aws-ecs-express-deploy
   cancel-in-progress: false
 
 env:
@@ -128,40 +128,42 @@ jobs:
           SERVICE_ARN="$(python3 -c 'import json; import sys; data=json.load(open("deploy-response.json")); print(data["service"]["serviceArn"])')"
           echo "service_arn=${SERVICE_ARN}" >> "$GITHUB_OUTPUT"
 
-      - name: Monitor ECS Express deployment
-        run: |
-          aws ecs monitor-express-gateway-service \
-            --service-arn "${{ steps.deploy-service.outputs.service_arn }}" \
-            --monitor-resources DEPLOYMENT \
-            --monitor-mode TEXT-ONLY
-
-      - name: Describe ECS Express service
+      - name: Wait for ECS Express service endpoint
         id: describe-service
         run: |
-          aws ecs describe-express-gateway-service \
-            --service-arn "${{ steps.deploy-service.outputs.service_arn }}" > service-description.json
+          for attempt in $(seq 1 30); do
+            aws ecs describe-express-gateway-service \
+              --service-arn "${{ steps.deploy-service.outputs.service_arn }}" > service-description.json
 
-          SERVICE_URL="$(python3 - <<'PY'
+            SERVICE_URL="$(python3 - <<'PY'
           import json
           data = json.load(open("service-description.json"))
           configurations = data["service"].get("activeConfigurations", [])
           endpoint = ""
           for config in configurations:
-            for ingress in config.get("ingressPaths", []):
-              if ingress.get("accessType") == "PUBLIC":
-                endpoint = ingress.get("endpoint", "")
-                break
-            if endpoint:
-              break
-          if not endpoint:
-            raise SystemExit("No public endpoint found in ECS Express service description")
-          if not endpoint.startswith("http"):
-            endpoint = f"https://{endpoint}"
+              for ingress in config.get("ingressPaths", []):
+                  if ingress.get("accessType") == "PUBLIC":
+                      endpoint = ingress.get("endpoint", "")
+                      break
+              if endpoint:
+                  break
+          if endpoint and not endpoint.startswith("http"):
+              endpoint = f"https://{endpoint}"
           print(endpoint)
           PY
-          )"
+            )"
 
-          echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
+            if [ -n "${SERVICE_URL}" ]; then
+              echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "Attempt ${attempt}/30: ECS Express endpoint not available yet. Waiting..."
+            sleep 20
+          done
+
+          echo "Failed to discover a public ECS Express service endpoint"
+          exit 1
 
   verify:
     name: verify
