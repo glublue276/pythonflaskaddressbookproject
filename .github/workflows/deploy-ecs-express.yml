@@ -1,5 +1,8 @@
 name: Deploy to Amazon ECS Express Mode
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
     inputs:
@@ -16,15 +19,6 @@ concurrency:
   group: aws-ecs-express-deploy
   cancel-in-progress: false
 
-env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-  ECS_EXPRESS_SERVICE_ARN: ${{ vars.ECS_EXPRESS_SERVICE_ARN }}
-  ECS_EXPRESS_SERVICE_NAME: ${{ vars.ECS_EXPRESS_SERVICE_NAME }}
-  ECS_EXPRESS_EXECUTION_ROLE_ARN: ${{ vars.ECS_EXPRESS_EXECUTION_ROLE_ARN }}
-  ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN: ${{ vars.ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN }}
-  MONGO_URI_SECRET_ARN: ${{ vars.MONGO_URI_SECRET_ARN }}
-
 jobs:
   deploy:
     name: deploy
@@ -39,14 +33,36 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Validate deployment configuration
+      - name: Normalize deployment configuration
         run: |
+          trim() {
+            printf '%s' "$1" | tr -d '\r' | xargs
+          }
+
+          AWS_REGION="$(trim '${{ vars.AWS_REGION }}')"
+          ECR_REPOSITORY="$(trim '${{ vars.ECR_REPOSITORY }}')"
+          ECS_EXPRESS_SERVICE_ARN="$(trim '${{ vars.ECS_EXPRESS_SERVICE_ARN }}')"
+          ECS_EXPRESS_SERVICE_NAME="$(trim '${{ vars.ECS_EXPRESS_SERVICE_NAME }}')"
+          ECS_EXPRESS_EXECUTION_ROLE_ARN="$(trim '${{ vars.ECS_EXPRESS_EXECUTION_ROLE_ARN }}')"
+          ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN="$(trim '${{ vars.ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN }}')"
+          MONGO_URI_SECRET_ARN="$(trim '${{ vars.MONGO_URI_SECRET_ARN }}')"
+
           test -n "${AWS_REGION}" || (echo "Missing repo variable AWS_REGION" && exit 1)
           test -n "${ECR_REPOSITORY}" || (echo "Missing repo variable ECR_REPOSITORY" && exit 1)
           test -n "${ECS_EXPRESS_SERVICE_NAME}" || (echo "Missing repo variable ECS_EXPRESS_SERVICE_NAME" && exit 1)
           test -n "${ECS_EXPRESS_EXECUTION_ROLE_ARN}" || (echo "Missing repo variable ECS_EXPRESS_EXECUTION_ROLE_ARN" && exit 1)
           test -n "${ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN}" || (echo "Missing repo variable ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN" && exit 1)
           test -n "${MONGO_URI_SECRET_ARN}" || (echo "Missing repo variable MONGO_URI_SECRET_ARN" && exit 1)
+
+          {
+            echo "AWS_REGION=${AWS_REGION}"
+            echo "ECR_REPOSITORY=${ECR_REPOSITORY}"
+            echo "ECS_EXPRESS_SERVICE_ARN=${ECS_EXPRESS_SERVICE_ARN}"
+            echo "ECS_EXPRESS_SERVICE_NAME=${ECS_EXPRESS_SERVICE_NAME}"
+            echo "ECS_EXPRESS_EXECUTION_ROLE_ARN=${ECS_EXPRESS_EXECUTION_ROLE_ARN}"
+            echo "ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN=${ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN}"
+            echo "MONGO_URI_SECRET_ARN=${MONGO_URI_SECRET_ARN}"
+          } >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
