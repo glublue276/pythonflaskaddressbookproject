@@ -191,7 +191,13 @@ jobs:
         run: |
           HEALTH_URL="${{ needs.deploy.outputs.service_url }}/health"
           for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error "${HEALTH_URL}"; then
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --connect-timeout 5 \
+              --max-time 10 \
+              "${HEALTH_URL}"; then
               echo
               echo "Health check passed for ${HEALTH_URL}"
               exit 0
