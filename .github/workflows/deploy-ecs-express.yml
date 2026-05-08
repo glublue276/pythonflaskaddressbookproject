@@ -28,6 +28,8 @@ jobs:
       image_tag: ${{ steps.build-image.outputs.image_tag }}
       service_arn: ${{ steps.deploy-service.outputs.service_arn }}
       service_url: ${{ steps.describe-service.outputs.service_url }}
+      service_name: ${{ env.ECS_EXPRESS_SERVICE_NAME }}
+      log_group: /ecs/express/${{ env.ECS_EXPRESS_SERVICE_NAME }}
 
     steps:
       - name: Check out repository
@@ -208,14 +210,37 @@ jobs:
           echo "Deployment health check failed for ${HEALTH_URL}"
           exit 1
 
+      - name: Configure AWS credentials for diagnostics
+        if: failure()
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Capture ECS service diagnostics
+        if: failure()
+        run: |
+          aws ecs describe-express-gateway-service \
+            --service-arn "${{ needs.deploy.outputs.service_arn }}" > ecs-service-diagnostics.json
+
+          cat <<EOF > ecs-debug-hints.txt
+          service_name=${{ needs.deploy.outputs.service_name }}
+          service_arn=${{ needs.deploy.outputs.service_arn }}
+          service_url=${{ needs.deploy.outputs.service_url }}
+          expected_log_group=${{ needs.deploy.outputs.log_group }}
+          cloudwatch_region=${{ vars.AWS_REGION }}
+          EOF
+
       - name: Write deployment metadata
         if: always()
         run: |
           cat <<EOF > deployment-summary.txt
           image_uri=${{ needs.deploy.outputs.image_uri }}
           image_tag=${{ needs.deploy.outputs.image_tag }}
+          ecs_express_service_name=${{ needs.deploy.outputs.service_name }}
           ecs_express_service_arn=${{ needs.deploy.outputs.service_arn }}
           ecs_express_service_url=${{ needs.deploy.outputs.service_url }}
+          expected_cloudwatch_log_group=${{ needs.deploy.outputs.log_group }}
           workflow_run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EOF
 
@@ -224,5 +249,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aws-ecs-express-deploy-metadata
-          path: deployment-summary.txt
+          path: |
+            deployment-summary.txt
+            ecs-debug-hints.txt
+            ecs-service-diagnostics.json
           if-no-files-found: warn
