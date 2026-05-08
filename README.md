@@ -253,15 +253,67 @@ Run the Python unit tests:
 pytest tests/e2e/unit-tests/test_app.py
 ```
 
-### AWS App Runner deployment
+### AWS ECS Express Mode deployment
 
-This repository is ready to deploy as a containerized service to AWS App
-Runner.
+This repository is ready to deploy as a containerized service to Amazon ECS
+Express Mode.
 
-1. Create a MongoDB Atlas cluster or another reachable MongoDB deployment.
-2. Build and push the Docker image to Amazon ECR.
-3. Create an App Runner service from that ECR image.
-4. Set runtime environment variables:
+#### Required AWS setup
+
+Before you run the deployment workflow, set up:
+
+1. An Amazon ECR repository for the application image.
+2. A GitHub OIDC IAM role that GitHub Actions can assume.
+3. Repository variables in GitHub:
+   - `AWS_REGION`
+   - `ECR_REPOSITORY`
+   - `ECS_EXPRESS_SERVICE_NAME`
+   - `ECS_EXPRESS_SERVICE_ARN`
+   - `ECS_EXPRESS_EXECUTION_ROLE_ARN`
+   - `ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN`
+   - `MONGO_URI_SECRET_ARN`
+4. Repository secret in GitHub:
+   - `AWS_ROLE_TO_ASSUME`
+
+The workflow publishes both a commit-based image tag and a `latest` tag. It
+then either creates an ECS Express service or updates an existing one,
+depending on whether `ECS_EXPRESS_SERVICE_ARN` is already set in the
+repository variables.
+
+For ECS Express Mode, AWS documents two service roles:
+
+- a task execution role with `AmazonECSTaskExecutionRolePolicy`
+- an infrastructure role with
+  `AmazonECSInfrastructureRoleforExpressGatewayServices`
+
+#### Deployment workflow
+
+The repository includes a manual GitHub Actions workflow:
+
+```text
+.github/workflows/deploy-ecs-express.yml
+```
+
+Run it from the GitHub Actions tab with `workflow_dispatch`.
+
+What it does:
+
+1. Assumes your AWS role through GitHub OIDC.
+2. Ensures the target ECR repository exists.
+3. Builds and pushes the Docker image to ECR.
+4. Creates or updates an Amazon ECS Express Mode service.
+5. Polls the deployed `/health` endpoint until the app is healthy.
+6. Uploads a small deployment summary artifact to the workflow run.
+
+You can optionally provide an `image_tag` input when you manually launch the
+workflow. If you leave it blank, the workflow uses the current commit SHA.
+
+#### ECS Express runtime settings
+
+The deployed ECS Express service should also include:
+
+1. A MongoDB Atlas cluster or another reachable MongoDB deployment.
+2. Runtime environment variables:
 
 ```text
 MONGO_URI=mongodb+srv://...
@@ -270,12 +322,28 @@ MONGO_COLLECTION=contacts
 PORT=5000
 ```
 
-5. Set the health check path in App Runner to:
+3. A health check path of:
 
 ```text
 /health
 ```
 
+### ECS Express notes
+
+On the first deployment, leave `ECS_EXPRESS_SERVICE_ARN` empty in GitHub
+variables. The workflow will create the ECS Express service using:
+
+- `ECS_EXPRESS_SERVICE_NAME`
+- `ECS_EXPRESS_EXECUTION_ROLE_ARN`
+- `ECS_EXPRESS_INFRASTRUCTURE_ROLE_ARN`
+
+After the first successful create, copy the resulting ECS Express service ARN
+into `ECS_EXPRESS_SERVICE_ARN` in GitHub variables so later runs update the
+same service.
+
+The MongoDB connection string should be stored in AWS Secrets Manager or SSM
+Parameter Store, and `MONGO_URI_SECRET_ARN` should point to that secret or
+parameter ARN.
 ### Example ECR flow
 
 ```bash
@@ -292,5 +360,5 @@ docker tag python-address-book:latest <account-id>.dkr.ecr.<aws-region>.amazonaw
 docker push <account-id>.dkr.ecr.<aws-region>.amazonaws.com/python-address-book:latest
 ```
 
-From there, point App Runner at the ECR image and configure the environment
-variables above.
+From there, create or update the ECS Express Mode service with the image and
+runtime settings above.
