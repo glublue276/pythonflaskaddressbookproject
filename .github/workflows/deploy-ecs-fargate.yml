@@ -104,6 +104,28 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: Resolve Mongo secret reference
+        run: |
+          MONGO_URI_SECRET_VALUE_FROM="${MONGO_URI_SECRET_ARN}"
+
+          if [[ "${MONGO_URI_SECRET_ARN}" == *":MONGO_URI::"* ]]; then
+            echo "MONGO_URI_SECRET_VALUE_FROM=${MONGO_URI_SECRET_VALUE_FROM}" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if [[ "${MONGO_URI_SECRET_ARN}" == arn:*:secretsmanager:* ]]; then
+            SECRET_STRING="$(aws secretsmanager get-secret-value \
+              --secret-id "${MONGO_URI_SECRET_ARN}" \
+              --query SecretString \
+              --output text)"
+
+            if SECRET_STRING="${SECRET_STRING}" python -c 'import json, os, sys; sys.exit(0 if isinstance(json.loads(os.environ["SECRET_STRING"]), dict) and "MONGO_URI" in json.loads(os.environ["SECRET_STRING"]) else 1)' 2>/dev/null; then
+              MONGO_URI_SECRET_VALUE_FROM="${MONGO_URI_SECRET_ARN}:MONGO_URI::"
+            fi
+          fi
+
+          echo "MONGO_URI_SECRET_VALUE_FROM=${MONGO_URI_SECRET_VALUE_FROM}" >> "$GITHUB_ENV"
+
       - name: Ensure ECR repository exists
         run: |
           aws ecr describe-repositories --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 || \
@@ -317,7 +339,7 @@ jobs:
                   {"name": "PORT", "value": "5000"}
                 ],
                 "secrets": [
-                  {"name": "MONGO_URI", "valueFrom": "${MONGO_URI_SECRET_ARN}"}
+                  {"name": "MONGO_URI", "valueFrom": "${MONGO_URI_SECRET_VALUE_FROM}"}
                 ],
                 "logConfiguration": {
                   "logDriver": "awslogs",

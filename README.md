@@ -201,6 +201,10 @@ ECS_EXPRESS_EXECUTION_ROLE_ARN
 ECS_EXPRESS_SERVICE_NAME
 ```
 
+`MONGO_URI_SECRET_ARN` may point either to a raw MongoDB URI secret string or
+to an AWS Secrets Manager JSON secret with a `MONGO_URI` key. The workflow
+detects the JSON form and passes only that key to the container.
+
 Optional repository variables:
 
 ```text
@@ -391,7 +395,8 @@ same service.
 
 The MongoDB connection string should be stored in AWS Secrets Manager or SSM
 Parameter Store, and `MONGO_URI_SECRET_ARN` should point to that secret or
-parameter ARN.
+parameter ARN. If the AWS Secrets Manager value is JSON, store the connection
+string under a `MONGO_URI` key.
 ### Example ECR flow
 
 ```bash
