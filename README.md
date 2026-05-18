@@ -172,6 +172,54 @@ The app also exposes a health endpoint:
 /health
 ```
 
+For database readiness checks, use:
+
+```text
+/ready
+```
+
+### AWS ECS deployment
+
+The supported deployment path is the GitHub Actions workflow:
+
+```text
+.github/workflows/deploy-ecs-fargate.yml
+```
+
+It keeps the existing AWS setup: the same ECR repository, task execution role,
+MongoDB secret, Docker image, and `/health` endpoint. The workflow provisions a
+standard ECS Fargate service behind an Application Load Balancer instead of ECS
+Express managed ingress.
+
+Required repository variables:
+
+```text
+AWS_REGION
+ECR_REPOSITORY
+MONGO_URI_SECRET_ARN
+ECS_EXPRESS_EXECUTION_ROLE_ARN
+ECS_EXPRESS_SERVICE_NAME
+```
+
+`MONGO_URI_SECRET_ARN` may point either to a raw MongoDB URI secret string or
+to an AWS Secrets Manager JSON secret with a `MONGO_URI` key. The workflow
+detects the JSON form and passes only that key to the container.
+
+Optional repository variables:
+
+```text
+ECS_CLUSTER_NAME
+ECS_SERVICE_NAME
+ECS_TASK_EXECUTION_ROLE_ARN
+ECS_TASK_ROLE_ARN
+ECS_VPC_ID
+ECS_SUBNET_IDS
+```
+
+If the optional ECS values are omitted, the workflow uses the default cluster,
+default VPC subnets, and a Fargate service name derived from the existing ECS
+Express service name.
+
 ### Sandbox-style container test
 
 Build the container locally:
@@ -328,6 +376,10 @@ PORT=5000
 /health
 ```
 
+The `/health` route only verifies that the Flask container is serving traffic.
+The `/ready` route verifies MongoDB connectivity and returns an error if the
+database is not reachable.
+
 ### ECS Express notes
 
 On the first deployment, leave `ECS_EXPRESS_SERVICE_ARN` empty in GitHub
@@ -343,8 +395,8 @@ same service.
 
 The MongoDB connection string should be stored in AWS Secrets Manager or SSM
 Parameter Store, and `MONGO_URI_SECRET_ARN` should point to that secret or
-parameter ARN.
-
+parameter ARN. If the AWS Secrets Manager value is JSON, store the connection
+string under a `MONGO_URI` key.
 ### Example ECR flow
 
 ```bash

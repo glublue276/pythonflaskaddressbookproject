@@ -189,6 +189,39 @@ jobs:
     needs: deploy
 
     steps:
+      - name: Wait for public ingress DNS and TLS
+        run: |
+          SERVICE_URL="${{ needs.deploy.outputs.service_url }}"
+          SERVICE_HOST="$(python3 -c 'from urllib.parse import urlparse; print(urlparse("${{ needs.deploy.outputs.service_url }}").hostname or "")')"
+
+          if [ -z "${SERVICE_HOST}" ]; then
+            echo "Could not parse service host from ${SERVICE_URL}"
+            exit 1
+          fi
+
+          for attempt in $(seq 1 45); do
+            if getent hosts "${SERVICE_HOST}" >/dev/null 2>&1; then
+              if curl \
+                --head \
+                --fail \
+                --silent \
+                --show-error \
+                --connect-timeout 5 \
+                --max-time 10 \
+                "${SERVICE_URL}/health" >/dev/null; then
+                echo "Public ingress is reachable over HTTPS for ${SERVICE_URL}"
+                exit 0
+              fi
+              echo "Attempt ${attempt}/45: DNS resolved, but HTTPS is not ready yet. Waiting..."
+            else
+              echo "Attempt ${attempt}/45: DNS is not ready for ${SERVICE_HOST}. Waiting..."
+            fi
+            sleep 20
+          done
+
+          echo "Public ingress did not become reachable for ${SERVICE_URL}"
+          exit 1
+
       - name: Wait for health endpoint
         run: |
           HEALTH_URL="${{ needs.deploy.outputs.service_url }}/health"
@@ -220,6 +253,8 @@ jobs:
       - name: Capture ECS service diagnostics
         if: failure()
         run: |
+          SERVICE_HOST="$(python3 -c 'from urllib.parse import urlparse; print(urlparse("${{ needs.deploy.outputs.service_url }}").hostname or "")')"
+
           aws ecs describe-express-gateway-service \
             --service-arn "${{ needs.deploy.outputs.service_arn }}" > ecs-service-diagnostics.json
 
@@ -227,6 +262,8 @@ jobs:
           service_name=${{ needs.deploy.outputs.service_name }}
           service_arn=${{ needs.deploy.outputs.service_arn }}
           service_url=${{ needs.deploy.outputs.service_url }}
+          readiness_url=${{ needs.deploy.outputs.service_url }}/ready
+          public_ingress_host=${SERVICE_HOST}
           expected_log_group=${{ needs.deploy.outputs.log_group }}
           cloudwatch_region=${{ vars.AWS_REGION }}
           EOF
@@ -234,12 +271,16 @@ jobs:
       - name: Write deployment metadata
         if: always()
         run: |
+          SERVICE_HOST="$(python3 -c 'from urllib.parse import urlparse; print(urlparse("${{ needs.deploy.outputs.service_url }}").hostname or "")')"
+
           cat <<EOF > deployment-summary.txt
           image_uri=${{ needs.deploy.outputs.image_uri }}
           image_tag=${{ needs.deploy.outputs.image_tag }}
           ecs_express_service_name=${{ needs.deploy.outputs.service_name }}
           ecs_express_service_arn=${{ needs.deploy.outputs.service_arn }}
           ecs_express_service_url=${{ needs.deploy.outputs.service_url }}
+          ecs_express_readiness_url=${{ needs.deploy.outputs.service_url }}/ready
+          ecs_express_public_ingress_host=${SERVICE_HOST}
           expected_cloudwatch_log_group=${{ needs.deploy.outputs.log_group }}
           workflow_run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EOF
