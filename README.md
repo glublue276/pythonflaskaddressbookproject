@@ -178,6 +178,44 @@ For database readiness checks, use:
 /ready
 ```
 
+### AWS ECS deployment
+
+The supported deployment path is the GitHub Actions workflow:
+
+```text
+.github/workflows/deploy-ecs-fargate.yml
+```
+
+It keeps the existing AWS setup: the same ECR repository, task execution role,
+MongoDB secret, Docker image, and `/health` endpoint. The workflow provisions a
+standard ECS Fargate service behind an Application Load Balancer instead of ECS
+Express managed ingress.
+
+Required repository variables:
+
+```text
+AWS_REGION
+ECR_REPOSITORY
+MONGO_URI_SECRET_ARN
+ECS_EXPRESS_EXECUTION_ROLE_ARN
+ECS_EXPRESS_SERVICE_NAME
+```
+
+Optional repository variables:
+
+```text
+ECS_CLUSTER_NAME
+ECS_SERVICE_NAME
+ECS_TASK_EXECUTION_ROLE_ARN
+ECS_TASK_ROLE_ARN
+ECS_VPC_ID
+ECS_SUBNET_IDS
+```
+
+If the optional ECS values are omitted, the workflow uses the default cluster,
+default VPC subnets, and a Fargate service name derived from the existing ECS
+Express service name.
+
 ### Sandbox-style container test
 
 Build the container locally:

@@ -1,0 +1,422 @@
+name: Deploy to Amazon ECS Fargate
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Optional image tag override. Defaults to the current commit SHA.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-ecs-fargate-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.build-image.outputs.image_uri }}
+      image_tag: ${{ steps.build-image.outputs.image_tag }}
+      service_name: ${{ steps.config.outputs.service_name }}
+      service_url: ${{ steps.deploy-service.outputs.service_url }}
+      log_group: ${{ steps.config.outputs.log_group }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Normalize deployment configuration
+        id: config
+        run: |
+          trim() {
+            printf '%s' "$1" | tr -d '\r' | xargs
+          }
+
+          AWS_REGION="$(trim '${{ vars.AWS_REGION }}')"
+          ECR_REPOSITORY="$(trim '${{ vars.ECR_REPOSITORY }}')"
+          MONGO_URI_SECRET_ARN="$(trim '${{ vars.MONGO_URI_SECRET_ARN }}')"
+
+          ECS_CLUSTER_NAME="$(trim '${{ vars.ECS_CLUSTER_NAME }}')"
+          ECS_SERVICE_NAME="$(trim '${{ vars.ECS_SERVICE_NAME }}')"
+          ECS_TASK_EXECUTION_ROLE_ARN="$(trim '${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}')"
+          ECS_TASK_ROLE_ARN="$(trim '${{ vars.ECS_TASK_ROLE_ARN }}')"
+          ECS_VPC_ID="$(trim '${{ vars.ECS_VPC_ID }}')"
+          ECS_SUBNET_IDS="$(trim '${{ vars.ECS_SUBNET_IDS }}')"
+
+          LEGACY_SERVICE_NAME="$(trim '${{ vars.ECS_EXPRESS_SERVICE_NAME }}')"
+          LEGACY_EXECUTION_ROLE_ARN="$(trim '${{ vars.ECS_EXPRESS_EXECUTION_ROLE_ARN }}')"
+
+          test -n "${AWS_REGION}" || (echo "Missing repo variable AWS_REGION" && exit 1)
+          test -n "${ECR_REPOSITORY}" || (echo "Missing repo variable ECR_REPOSITORY" && exit 1)
+          test -n "${MONGO_URI_SECRET_ARN}" || (echo "Missing repo variable MONGO_URI_SECRET_ARN" && exit 1)
+
+          if [ -z "${ECS_CLUSTER_NAME}" ]; then
+            ECS_CLUSTER_NAME="default"
+          fi
+          if [ -z "${ECS_SERVICE_NAME}" ]; then
+            ECS_SERVICE_NAME="${LEGACY_SERVICE_NAME:-python-address-book}-fargate"
+          fi
+          if [ -z "${ECS_TASK_EXECUTION_ROLE_ARN}" ]; then
+            ECS_TASK_EXECUTION_ROLE_ARN="${LEGACY_EXECUTION_ROLE_ARN}"
+          fi
+          test -n "${ECS_TASK_EXECUTION_ROLE_ARN}" || (echo "Missing repo variable ECS_TASK_EXECUTION_ROLE_ARN or ECS_EXPRESS_EXECUTION_ROLE_ARN" && exit 1)
+
+          ALB_NAME="$(printf '%s' "${ECS_SERVICE_NAME}-alb" | tr '_' '-' | cut -c1-32)"
+          TARGET_GROUP_NAME="$(printf '%s' "${ECS_SERVICE_NAME}-tg" | tr '_' '-' | cut -c1-32)"
+          ALB_SECURITY_GROUP_NAME="$(printf '%s' "${ECS_SERVICE_NAME}-alb-sg" | tr '_' '-' | cut -c1-255)"
+          SERVICE_SECURITY_GROUP_NAME="$(printf '%s' "${ECS_SERVICE_NAME}-svc-sg" | tr '_' '-' | cut -c1-255)"
+          ECS_LOG_GROUP="/ecs/fargate/${ECS_SERVICE_NAME}"
+
+          {
+            echo "AWS_REGION=${AWS_REGION}"
+            echo "ECR_REPOSITORY=${ECR_REPOSITORY}"
+            echo "MONGO_URI_SECRET_ARN=${MONGO_URI_SECRET_ARN}"
+            echo "ECS_CLUSTER_NAME=${ECS_CLUSTER_NAME}"
+            echo "ECS_SERVICE_NAME=${ECS_SERVICE_NAME}"
+            echo "ECS_TASK_EXECUTION_ROLE_ARN=${ECS_TASK_EXECUTION_ROLE_ARN}"
+            echo "ECS_TASK_ROLE_ARN=${ECS_TASK_ROLE_ARN}"
+            echo "ECS_VPC_ID=${ECS_VPC_ID}"
+            echo "ECS_SUBNET_IDS=${ECS_SUBNET_IDS}"
+            echo "ALB_NAME=${ALB_NAME}"
+            echo "TARGET_GROUP_NAME=${TARGET_GROUP_NAME}"
+            echo "ALB_SECURITY_GROUP_NAME=${ALB_SECURITY_GROUP_NAME}"
+            echo "SERVICE_SECURITY_GROUP_NAME=${SERVICE_SECURITY_GROUP_NAME}"
+            echo "ECS_LOG_GROUP=${ECS_LOG_GROUP}"
+          } >> "$GITHUB_ENV"
+
+          {
+            echo "service_name=${ECS_SERVICE_NAME}"
+            echo "log_group=${ECS_LOG_GROUP}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 || \
+          aws ecr create-repository \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-scanning-configuration scanOnPush=true
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "registry=${REGISTRY}" >> "$GITHUB_OUTPUT"
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REGISTRY}"
+
+      - name: Build and push image
+        id: build-image
+        run: |
+          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          if [ -z "${IMAGE_TAG}" ]; then
+            IMAGE_TAG="${GITHUB_SHA::7}"
+          fi
+
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          LATEST_IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:latest"
+
+          docker build -t "${IMAGE_URI}" -t "${LATEST_IMAGE_URI}" .
+          docker push "${IMAGE_URI}"
+          docker push "${LATEST_IMAGE_URI}"
+
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve VPC and subnets
+        run: |
+          if [ -z "${ECS_VPC_ID}" ]; then
+            ECS_VPC_ID="$(aws ec2 describe-vpcs \
+              --filters Name=is-default,Values=true \
+              --query 'Vpcs[0].VpcId' \
+              --output text)"
+          fi
+          test -n "${ECS_VPC_ID}" && test "${ECS_VPC_ID}" != "None" || (echo "Could not resolve a VPC" && exit 1)
+
+          if [ -z "${ECS_SUBNET_IDS}" ]; then
+            ECS_SUBNET_IDS="$(aws ec2 describe-subnets \
+              --filters "Name=vpc-id,Values=${ECS_VPC_ID}" "Name=default-for-az,Values=true" \
+              --query 'Subnets[].SubnetId' \
+              --output text | tr '\t' ',')"
+          fi
+          test -n "${ECS_SUBNET_IDS}" || (echo "Could not resolve subnets" && exit 1)
+
+          {
+            echo "ECS_VPC_ID=${ECS_VPC_ID}"
+            echo "ECS_SUBNET_IDS=${ECS_SUBNET_IDS}"
+          } >> "$GITHUB_ENV"
+
+      - name: Ensure ECS cluster and log group
+        run: |
+          aws ecs describe-clusters --clusters "${ECS_CLUSTER_NAME}" \
+            --query 'clusters[0].status' --output text | grep -q ACTIVE || \
+          aws ecs create-cluster --cluster-name "${ECS_CLUSTER_NAME}"
+
+          aws logs describe-log-groups --log-group-name-prefix "${ECS_LOG_GROUP}" \
+            --query 'logGroups[?logGroupName==`'"${ECS_LOG_GROUP}"'`].logGroupName' \
+            --output text | grep -q "${ECS_LOG_GROUP}" || \
+          aws logs create-log-group --log-group-name "${ECS_LOG_GROUP}"
+
+      - name: Ensure security groups
+        id: security-groups
+        run: |
+          get_group_id() {
+            aws ec2 describe-security-groups \
+              --filters "Name=vpc-id,Values=${ECS_VPC_ID}" "Name=group-name,Values=$1" \
+              --query 'SecurityGroups[0].GroupId' \
+              --output text
+          }
+
+          ALB_SECURITY_GROUP_ID="$(get_group_id "${ALB_SECURITY_GROUP_NAME}")"
+          if [ "${ALB_SECURITY_GROUP_ID}" = "None" ] || [ -z "${ALB_SECURITY_GROUP_ID}" ]; then
+            ALB_SECURITY_GROUP_ID="$(aws ec2 create-security-group \
+              --group-name "${ALB_SECURITY_GROUP_NAME}" \
+              --description "Public ALB access for ${ECS_SERVICE_NAME}" \
+              --vpc-id "${ECS_VPC_ID}" \
+              --query GroupId \
+              --output text)"
+          fi
+
+          SERVICE_SECURITY_GROUP_ID="$(get_group_id "${SERVICE_SECURITY_GROUP_NAME}")"
+          if [ "${SERVICE_SECURITY_GROUP_ID}" = "None" ] || [ -z "${SERVICE_SECURITY_GROUP_ID}" ]; then
+            SERVICE_SECURITY_GROUP_ID="$(aws ec2 create-security-group \
+              --group-name "${SERVICE_SECURITY_GROUP_NAME}" \
+              --description "ECS service access for ${ECS_SERVICE_NAME}" \
+              --vpc-id "${ECS_VPC_ID}" \
+              --query GroupId \
+              --output text)"
+          fi
+
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${ALB_SECURITY_GROUP_ID}" \
+            --ip-permissions '[
+              {"IpProtocol":"tcp","FromPort":80,"ToPort":80,"IpRanges":[{"CidrIp":"0.0.0.0/0","Description":"HTTP from internet"}]}
+            ]' >/dev/null 2>&1 || true
+
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${SERVICE_SECURITY_GROUP_ID}" \
+            --ip-permissions '[
+              {"IpProtocol":"tcp","FromPort":5000,"ToPort":5000,"UserIdGroupPairs":[{"GroupId":"'"${ALB_SECURITY_GROUP_ID}"'","Description":"App traffic from ALB"}]}
+            ]' >/dev/null 2>&1 || true
+
+          {
+            echo "alb_security_group_id=${ALB_SECURITY_GROUP_ID}"
+            echo "service_security_group_id=${SERVICE_SECURITY_GROUP_ID}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure load balancer and target group
+        id: load-balancer
+        run: |
+          ALB_ARN="$(aws elbv2 describe-load-balancers \
+            --names "${ALB_NAME}" \
+            --query 'LoadBalancers[0].LoadBalancerArn' \
+            --output text 2>/dev/null || true)"
+
+          if [ -z "${ALB_ARN}" ] || [ "${ALB_ARN}" = "None" ]; then
+            ALB_ARN="$(aws elbv2 create-load-balancer \
+              --name "${ALB_NAME}" \
+              --type application \
+              --scheme internet-facing \
+              --security-groups "${{ steps.security-groups.outputs.alb_security_group_id }}" \
+              --subnets ${ECS_SUBNET_IDS//,/ } \
+              --query 'LoadBalancers[0].LoadBalancerArn' \
+              --output text)"
+          fi
+
+          aws elbv2 wait load-balancer-available --load-balancer-arns "${ALB_ARN}"
+
+          ALB_DNS_NAME="$(aws elbv2 describe-load-balancers \
+            --load-balancer-arns "${ALB_ARN}" \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text)"
+
+          TARGET_GROUP_ARN="$(aws elbv2 describe-target-groups \
+            --names "${TARGET_GROUP_NAME}" \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text 2>/dev/null || true)"
+
+          if [ -z "${TARGET_GROUP_ARN}" ] || [ "${TARGET_GROUP_ARN}" = "None" ]; then
+            TARGET_GROUP_ARN="$(aws elbv2 create-target-group \
+              --name "${TARGET_GROUP_NAME}" \
+              --protocol HTTP \
+              --port 5000 \
+              --target-type ip \
+              --vpc-id "${ECS_VPC_ID}" \
+              --health-check-protocol HTTP \
+              --health-check-path /health \
+              --matcher HttpCode=200 \
+              --query 'TargetGroups[0].TargetGroupArn' \
+              --output text)"
+          fi
+
+          LISTENER_ARN="$(aws elbv2 describe-listeners \
+            --load-balancer-arn "${ALB_ARN}" \
+            --query 'Listeners[?Port==`80`].ListenerArn | [0]' \
+            --output text)"
+
+          if [ -z "${LISTENER_ARN}" ] || [ "${LISTENER_ARN}" = "None" ]; then
+            aws elbv2 create-listener \
+              --load-balancer-arn "${ALB_ARN}" \
+              --protocol HTTP \
+              --port 80 \
+              --default-actions Type=forward,TargetGroupArn="${TARGET_GROUP_ARN}" >/dev/null
+          else
+            aws elbv2 modify-listener \
+              --listener-arn "${LISTENER_ARN}" \
+              --default-actions Type=forward,TargetGroupArn="${TARGET_GROUP_ARN}" >/dev/null
+          fi
+
+          {
+            echo "alb_arn=${ALB_ARN}"
+            echo "target_group_arn=${TARGET_GROUP_ARN}"
+            echo "service_url=http://${ALB_DNS_NAME}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Register task definition
+        id: task-definition
+        run: |
+          TASK_ROLE_JSON=""
+          if [ -n "${ECS_TASK_ROLE_ARN}" ]; then
+            TASK_ROLE_JSON=", \"taskRoleArn\": \"${ECS_TASK_ROLE_ARN}\""
+          fi
+
+          cat > task-definition.json <<EOF
+          {
+            "family": "${ECS_SERVICE_NAME}",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "1024",
+            "memory": "2048",
+            "executionRoleArn": "${ECS_TASK_EXECUTION_ROLE_ARN}"
+            ${TASK_ROLE_JSON},
+            "containerDefinitions": [
+              {
+                "name": "app",
+                "image": "${{ steps.build-image.outputs.image_uri }}",
+                "essential": true,
+                "portMappings": [
+                  {"containerPort": 5000, "hostPort": 5000, "protocol": "tcp"}
+                ],
+                "environment": [
+                  {"name": "MONGO_DB_NAME", "value": "address_book"},
+                  {"name": "MONGO_COLLECTION", "value": "contacts"},
+                  {"name": "PORT", "value": "5000"}
+                ],
+                "secrets": [
+                  {"name": "MONGO_URI", "valueFrom": "${MONGO_URI_SECRET_ARN}"}
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "${ECS_LOG_GROUP}",
+                    "awslogs-region": "${AWS_REGION}",
+                    "awslogs-stream-prefix": "ecs"
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+
+          TASK_DEFINITION_ARN="$(aws ecs register-task-definition \
+            --cli-input-json file://task-definition.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)"
+
+          echo "task_definition_arn=${TASK_DEFINITION_ARN}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update ECS service
+        id: deploy-service
+        run: |
+          SERVICE_STATUS="$(aws ecs describe-services \
+            --cluster "${ECS_CLUSTER_NAME}" \
+            --services "${ECS_SERVICE_NAME}" \
+            --query 'services[0].status' \
+            --output text 2>/dev/null || true)"
+
+          NETWORK_CONFIGURATION="awsvpcConfiguration={subnets=[${ECS_SUBNET_IDS}],securityGroups=[${{ steps.security-groups.outputs.service_security_group_id }}],assignPublicIp=ENABLED}"
+
+          if [ "${SERVICE_STATUS}" = "ACTIVE" ] || [ "${SERVICE_STATUS}" = "DRAINING" ]; then
+            aws ecs update-service \
+              --cluster "${ECS_CLUSTER_NAME}" \
+              --service "${ECS_SERVICE_NAME}" \
+              --task-definition "${{ steps.task-definition.outputs.task_definition_arn }}" \
+              --desired-count 1 >/dev/null
+          else
+            aws ecs create-service \
+              --cluster "${ECS_CLUSTER_NAME}" \
+              --service-name "${ECS_SERVICE_NAME}" \
+              --task-definition "${{ steps.task-definition.outputs.task_definition_arn }}" \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "${NETWORK_CONFIGURATION}" \
+              --load-balancers "targetGroupArn=${{ steps.load-balancer.outputs.target_group_arn }},containerName=app,containerPort=5000" \
+              --health-check-grace-period-seconds 60 >/dev/null
+          fi
+
+          aws ecs wait services-stable \
+            --cluster "${ECS_CLUSTER_NAME}" \
+            --services "${ECS_SERVICE_NAME}"
+
+          echo "service_url=${{ steps.load-balancer.outputs.service_url }}" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    needs: deploy
+
+    steps:
+      - name: Wait for health endpoint
+        run: |
+          HEALTH_URL="${{ needs.deploy.outputs.service_url }}/health"
+          for attempt in $(seq 1 45); do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --connect-timeout 5 \
+              --max-time 10 \
+              "${HEALTH_URL}"; then
+              echo
+              echo "Health check passed for ${HEALTH_URL}"
+              exit 0
+            fi
+            echo "Attempt ${attempt}/45 failed. Waiting for deployment to become healthy..."
+            sleep 20
+          done
+          echo "Deployment health check failed for ${HEALTH_URL}"
+          exit 1
+
+      - name: Write deployment metadata
+        if: always()
+        run: |
+          cat <<EOF > deployment-summary.txt
+          image_uri=${{ needs.deploy.outputs.image_uri }}
+          image_tag=${{ needs.deploy.outputs.image_tag }}
+          ecs_service_name=${{ needs.deploy.outputs.service_name }}
+          ecs_service_url=${{ needs.deploy.outputs.service_url }}
+          ecs_readiness_url=${{ needs.deploy.outputs.service_url }}/ready
+          expected_cloudwatch_log_group=${{ needs.deploy.outputs.log_group }}
+          workflow_run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+
+      - name: Upload deployment metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-ecs-fargate-deploy-metadata
+          path: deployment-summary.txt
