@@ -172,6 +172,12 @@ The app also exposes a health endpoint:
 /health
 ```
 
+For database readiness checks, use:
+
+```text
+/ready
+```
+
 ### Sandbox-style container test
 
 Build the container locally:
@@ -327,6 +333,10 @@ PORT=5000
 ```text
 /health
 ```
+
+The `/health` route only verifies that the Flask container is serving traffic.
+The `/ready` route verifies MongoDB connectivity and returns an error if the
+database is not reachable.
 
 ### ECS Express notes
 

@@ -6,6 +6,20 @@ from bson import ObjectId
 import app as address_book_app
 
 
+class FakeAdmin:
+    def __init__(self):
+        self.commands = []
+
+    def command(self, name):
+        self.commands.append(name)
+        return {'ok': 1}
+
+
+class FailingAdmin:
+    def command(self, _name):
+        raise AssertionError('health check should not ping MongoDB')
+
+
 class FakeCursor:
     def __init__(self, documents):
         self._documents = documents
@@ -105,6 +119,25 @@ def make_client(monkeypatch):
     monkeypatch.setattr(address_book_app, 'contacts_collection', fake_collection)
     monkeypatch.setattr(address_book_app, 'indexes_ready', False)
     return address_book_app.app.test_client(), fake_collection
+
+
+def test_health_check_does_not_require_database(monkeypatch):
+    monkeypatch.setattr(address_book_app, 'client', SimpleNamespace(admin=FailingAdmin()))
+    response = address_book_app.app.test_client().get('/health')
+
+    assert response.status_code == 200
+    assert response.get_json() == {'status': 'ok'}
+
+
+def test_readiness_check_pings_database(monkeypatch):
+    fake_admin = FakeAdmin()
+    monkeypatch.setattr(address_book_app, 'client', SimpleNamespace(admin=fake_admin))
+
+    response = address_book_app.app.test_client().get('/ready')
+
+    assert response.status_code == 200
+    assert response.get_json() == {'status': 'ready'}
+    assert fake_admin.commands == ['ping']
 
 
 def test_create_contact(monkeypatch):

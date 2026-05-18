@@ -147,8 +147,13 @@ def index():
 
 @app.get("/health")
 def health_check():
-    client.admin.command("ping")
     return jsonify({"status": "ok"})
+
+
+@app.get("/ready")
+def readiness_check():
+    client.admin.command("ping")
+    return jsonify({"status": "ready"})
 
 
 @app.get("/api/contacts")

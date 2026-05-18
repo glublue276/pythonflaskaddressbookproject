@@ -227,6 +227,7 @@ jobs:
           service_name=${{ needs.deploy.outputs.service_name }}
           service_arn=${{ needs.deploy.outputs.service_arn }}
           service_url=${{ needs.deploy.outputs.service_url }}
+          readiness_url=${{ needs.deploy.outputs.service_url }}/ready
           expected_log_group=${{ needs.deploy.outputs.log_group }}
           cloudwatch_region=${{ vars.AWS_REGION }}
           EOF
@@ -240,6 +241,7 @@ jobs:
           ecs_express_service_name=${{ needs.deploy.outputs.service_name }}
           ecs_express_service_arn=${{ needs.deploy.outputs.service_arn }}
           ecs_express_service_url=${{ needs.deploy.outputs.service_url }}
+          ecs_express_readiness_url=${{ needs.deploy.outputs.service_url }}/ready
           expected_cloudwatch_log_group=${{ needs.deploy.outputs.log_group }}
           workflow_run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EOF
