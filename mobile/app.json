@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Address Book",
+    "slug": "address-book-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {},
+    "web": {
+      "bundler": "metro"
+    },
+    "extra": {
+      "apiBaseUrl": "http://python-address-book-fargate-alb-2037795374.us-east-2.elb.amazonaws.com"
+    }
+  }
+}

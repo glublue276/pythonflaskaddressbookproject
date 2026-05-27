@@ -91,6 +91,13 @@ dynamic extra fields.
 ```text
 .
 |-- app.py
+|-- mobile/
+|   |-- App.js
+|   |-- README.md
+|   |-- app.json
+|   |-- package.json
+|   `-- src/
+|       `-- api.js
 |-- package.json
 |-- playwright.config.js
 |-- requirements.txt
@@ -146,6 +153,30 @@ Then open:
 ```text
 http://127.0.0.1:5000
 ```
+
+## Mobile app
+
+The `mobile/` directory contains an Expo React Native app for the same address
+book API. It supports contact search, create, edit, delete, custom fields, and
+backend readiness checks.
+
+Run it with:
+
+```bash
+cd mobile
+npm install
+npm start
+```
+
+The mobile app defaults to the deployed Fargate API. To use a local Flask
+server, edit the API URL in the app or start Expo with:
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:5000 npm start
+```
+
+For Android emulators, use `http://10.0.2.2:5000` for a Flask server running on
+your host machine.
 
 ## Notes
 
